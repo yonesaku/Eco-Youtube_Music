@@ -26,9 +26,10 @@ dependencies {
     compileOnly(libs.echo.common)
     compileOnly(libs.kotlin.stdlib)
 
-    api(libs.ytmkt) { excludeKotlin() }  
-    implementation(libs.newpipe) { excludeKotlin() }  
-    implementation(libs.newpipe.extractor.kmp) { excludeKotlin() }  
+    api(libs.ytmkt) { 
+        excludeKotlin()
+    }  
+    implementation(libs.newpipe) { excludeKotlin() }
     implementation(libs.ktor.client.core) { excludeKotlin() }
     implementation(libs.ktor.client.cio) { excludeKotlin() }
     implementation(libs.ktor.client.content.negotiation) { excludeKotlin() }

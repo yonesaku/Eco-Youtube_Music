@@ -47,33 +47,26 @@ import dev.brahmkshatriya.echo.common.models.Track.Playable
 import dev.brahmkshatriya.echo.common.models.TrackDetails
 import dev.brahmkshatriya.echo.common.models.User
 import dev.brahmkshatriya.echo.common.settings.Setting
+import dev.brahmkshatriya.echo.common.settings.SettingList
 import dev.brahmkshatriya.echo.common.settings.SettingSwitch
 import dev.brahmkshatriya.echo.common.settings.Settings
 import dev.brahmkshatriya.echo.extension.endpoints.EchoArtistEndpoint
 import dev.brahmkshatriya.echo.extension.endpoints.EchoArtistMoreEndpoint
-import dev.brahmkshatriya.echo.extension.endpoints.EchoEditPlaylistEndpoint
-import dev.brahmkshatriya.echo.extension.endpoints.EchoLibraryEndPoint
-import dev.brahmkshatriya.echo.extension.endpoints.EchoLyricsEndPoint
-import dev.brahmkshatriya.echo.extension.endpoints.EchoPlaylistEndpoint
-import dev.brahmkshatriya.echo.extension.endpoints.EchoSearchEndpoint
-import dev.brahmkshatriya.echo.extension.endpoints.EchoSearchSuggestionsEndpoint
-import dev.brahmkshatriya.echo.extension.endpoints.EchoSongEndPoint
-import dev.brahmkshatriya.echo.extension.endpoints.EchoSongFeedEndpoint
-import dev.brahmkshatriya.echo.extension.endpoints.EchoSongRelatedEndpoint
-import dev.brahmkshatriya.echo.extension.endpoints.EchoVideoEndpoint
-import dev.brahmkshatriya.echo.extension.endpoints.EchoVisitorEndpoint
 import dev.brahmkshatriya.echo.extension.endpoints.GoogleAccountResponse
+import dev.brahmkshatriya.echo.extension.utils.CookieParser
+import dev.brahmkshatriya.echo.extension.providers.ExtensionComponents
 import dev.toastbits.ytmkt.impl.youtubei.YoutubeiApi
 import dev.toastbits.ytmkt.impl.youtubei.YoutubeiAuthenticationState
 import dev.toastbits.ytmkt.model.external.PlaylistEditor
 import dev.toastbits.ytmkt.model.external.SongLikedStatus
+import io.ktor.client.request.request
+import io.ktor.client.statement.bodyAsText
 import dev.toastbits.ytmkt.model.external.ThumbnailProvider.Quality.HIGH
 import dev.toastbits.ytmkt.model.external.ThumbnailProvider.Quality.LOW
 import dev.toastbits.ytmkt.model.external.mediaitem.YtmArtist
 import dev.toastbits.ytmkt.model.external.mediaitem.YtmPlaylist
 import dev.toastbits.ytmkt.model.external.mediaitem.YtmSong
 import dev.toastbits.ytmkt.model.external.YoutubeVideoFormat
-import dev.brahmkshatriya.echo.extension.NewPipeExtractorKmpVideoFormatsEndpoint
 import io.ktor.client.network.sockets.ConnectTimeoutException
 import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.request.headers
@@ -105,56 +98,56 @@ class YoutubeExtension : ExtensionClient, HomeFeedClient, TrackClient, SearchFee
             true
         ),
         SettingSwitch(
-            "Prefer Videos [Not Working For Now]",
+            "Prefer Videos",
             "prefer_videos",
-            "Prefer videos over audio when available",
+            "Prefer videos over audio when available.",
             false
+        ),
+        SettingList(
+            "Video Quality [Most of Time only 360p is available]",
+            "video_quality",
+            "Maximum video quality for playback. Higher quality uses more data and may buffer more.",
+            entryTitles = listOf("360p", "480p", "720p", "Best Available"),
+            entryValues = listOf("360", "480", "720", "999999"),
+            defaultEntryIndex = 1  
         )
     )
 
     private lateinit var settings: Settings
     override fun setSettings(settings: Settings) {
         this.settings = settings
+        components = ExtensionComponents(api, settings, json)
     }
 
     val api = YoutubeiApi(
         data_language = ENGLISH
     )
 
-    private suspend fun ensureVisitorId() {
-        if (api.visitor_id == null) {
-            api.visitor_id = visitorEndpoint.getVisitorId()
-        }
-    }
+    private val language = ENGLISH
+    
+    private lateinit var components: ExtensionComponents
+    
+    private val artistEndPoint by lazy { components.artistEndpoint }
+    private val artistMoreEndpoint by lazy { components.artistMoreEndpoint }
+    private val songRelatedEndpoint by lazy { components.songRelatedEndpoint }
+    private val lyricsEndPoint by lazy { components.lyricsEndpoint }
+    private val searchSuggestionsEndpoint by lazy { components.searchSuggestionsEndpoint }
+    private val playlistEndPoint by lazy { components.playlistEndpoint }
+    private val songFeedEndPoint by lazy { components.songFeedEndpoint }
+    
     private val thumbnailQuality
-        get() = if (settings.getBoolean("high_quality") == true) HIGH else LOW
+        get() = components.thumbnailQuality
 
     private val preferVideos
-        get() = settings.getBoolean("prefer_videos") == false
+        get() = components.preferVideos
 
-    private val language = ENGLISH
-    private val visitorEndpoint = EchoVisitorEndpoint(api)
-    private val songFeedEndPoint = EchoSongFeedEndpoint(api)
-    private val artistEndPoint = EchoArtistEndpoint(api)
-    private val artistMoreEndpoint = EchoArtistMoreEndpoint(api)
-    private val libraryEndPoint = EchoLibraryEndPoint(api)
-    private val songEndPoint = EchoSongEndPoint(api)
-    private val songRelatedEndpoint = EchoSongRelatedEndpoint(api)
-    private val videoEndpoint = EchoVideoEndpoint(api)
-    private val playlistEndPoint = EchoPlaylistEndpoint(api)
-    private val lyricsEndPoint = EchoLyricsEndPoint(api)
-    private val searchSuggestionsEndpoint = EchoSearchSuggestionsEndpoint(api)
-    private val searchEndpoint = EchoSearchEndpoint(api)
-    private val editorEndpoint = EchoEditPlaylistEndpoint(api)
-    private val newPipeExtractor by lazy { NewPipeExtractorKmpVideoFormatsEndpoint(api) }
-    private val ytmSongConverter by lazy { YtmSongConverter() }
     companion object {
         const val ENGLISH = "en-GB"
         const val SINGLES = "Singles"
         const val SONGS = "songs"
     }
     override suspend fun loadHomeFeed(): Feed<Shelf> {
-        val tabs = listOf<Tab>() 
+        val tabs = listOf<Tab>()
         return Feed(tabs) { tab ->
             val pagedData = PagedData.Continuous { continuation ->
                 val result = songFeedEndPoint.getSongFeed(
@@ -171,198 +164,11 @@ class YoutubeExtension : ExtensionClient, HomeFeedClient, TrackClient, SearchFee
     override suspend fun loadStreamableMedia(
         streamable: Streamable, isDownload: Boolean
     ): Streamable.Media {
-        return when (streamable.type) {
-            Streamable.MediaType.Server -> {
-                val videoId = streamable.extras["videoId"] 
-                    ?: throw Exception("No video ID found in streamable extras. This track may not be playable.")
-                
-                println("Loading streamable media for video ID: $videoId")
-                
-                // Try NewPipe first 
-                try {
-                    val newPipeExtractor = NewPipeExtractorKmpVideoFormatsEndpoint(api)
-                    
-                    val formatsResult = newPipeExtractor.getVideoFormats(videoId, include_non_default = true, filter = null)
-                    
-                    if (formatsResult.isSuccess) {
-                        val formats = formatsResult.getOrThrow()
-                        
-                        println("Found ${formats.size} total formats from NewPipe")
-                        formats.forEach { format ->
-                            println("Format: ${format.mimeType}, bitrate: ${format.bitrate}, hasUrl: ${format.url != null}")
-                        }
-                        
-                        val validFormats = formats.filter { it.url != null }
-                        
-                        if (validFormats.isNotEmpty()) {
-                            val audioFormats = validFormats.filter { 
-                                it.mimeType.startsWith("audio/") 
-                            }
-                            
-                            val videoFormats = if (preferVideos) {
-                                validFormats.filter { 
-                                    it.mimeType.startsWith("video/") 
-                                }
-                            } else {
-                                emptyList()
-                            }
-                            
-                            if (audioFormats.isNotEmpty() || videoFormats.isNotEmpty()) {
-                                val audioSources = audioFormats.map { format ->
-                                    val bitrateKbps = if (format.bitrate != null) format.bitrate / 1000 else 0
-                                    Streamable.Source.Http(
-                                        request = NetworkRequest(url = format.url!!),
-                                        type = Streamable.SourceType.Progressive,
-                                        quality = bitrateKbps.toInt(),
-                                        title = "Audio - ${format.mimeType}${if (bitrateKbps > 0) " - ${bitrateKbps}kbps" else ""}"
-                                    )
-                                }
-                                
-                                val videoSources = videoFormats.map { format ->
-                                    val bitrateKbps = if (format.bitrate != null) format.bitrate / 1000 else 0
-                                    Streamable.Source.Http(
-                                        request = NetworkRequest(url = format.url!!),
-                                        type = Streamable.SourceType.Progressive,
-                                        quality = bitrateKbps.toInt(),
-                                        title = "Video - ${format.mimeType}${if (format.bitrate != null) " - ${bitrateKbps}kbps" else ""}"
-                                    )
-                                }
-                                
-                                val result = when {
-                                    preferVideos && videoSources.isNotEmpty() && audioSources.isNotEmpty() -> {
-                                        Streamable.Media.Server(
-                                            sources = listOf(audioSources.first(), videoSources.first()),
-                                            merged = true
-                                        )
-                                    }
-                                    videoSources.isNotEmpty() && !preferVideos -> {
-                                        Streamable.Media.Server(videoSources, false)
-                                    }
-                                    audioSources.isNotEmpty() -> {
-                                        Streamable.Media.Server(audioSources, false)
-                                    }
-                                    else -> null
-                                }
-                                
-                                if (result != null) {
-                                    println("Successfully loaded streamable media using NewPipe extractor")
-                                    return result
-                                }
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    println("NewPipe extractor failed: ${e.message}")
-                    e.printStackTrace()
-                }
-                
-                // Fallback to YouTube Music API
-                println("Falling back to YouTube Music API for video ID: $videoId")
-                try {
-                    try {
-                        if (api.visitor_id == null) {
-                            println("Visitor ID is null, trying to get a new one...")
-                            api.visitor_id = visitorEndpoint.getVisitorId()
-                            println("Successfully set visitor ID: ${api.visitor_id}")
-                        } else {
-                            println("Using existing visitor ID: ${api.visitor_id}")
-                        }
-                    } catch (e: Exception) {
-                        println("Exception ensuring visitor ID: ${e.message}")
-                    }
-                    
-                    val (video, _) = videoEndpoint.getVideo(true, videoId)
-                    
-                    if (video.streamingData == null) {
-                        throw Exception("No streaming data available from YouTube Music API. The video may be restricted, age-gated, or unavailable.")
-                    }
-                    
-                    val audioSources = video.streamingData.adaptiveFormats
-                        .filter { it.mimeType.lowercase().contains("audio/") && it.url != null }
-                        .map { format ->
-                            val bitrateKbps = if (format.bitrate != null) format.bitrate / 1000 else 128
-                            Streamable.Source.Http(
-                                request = NetworkRequest(url = format.url!!),
-                                type = Streamable.SourceType.Progressive,
-                                quality = bitrateKbps.toInt(),
-                                title = "Audio - ${format.mimeType}${if (format.bitrate != null) " - ${bitrateKbps}kbps" else ""}"
-                            )
-                        }
-                    
-                    if (audioSources.isNotEmpty()) {
-                        println("Successfully loaded streamable media using YouTube Music API with ${audioSources.size} quality options")
-                        return Streamable.Media.Server(audioSources, false)
-                    } else {
-                        throw Exception("No audio sources found in YouTube Music API response")
-                    }
-                } catch (e: Exception) {
-                    println("YouTube Music API also failed: ${e.message}")
-                    e.printStackTrace()
-                    throw Exception("Failed to load streamable media using both NewPipe and YouTube Music API: ${e.message}")
-                }
-            }
-            Streamable.MediaType.Background -> {
-                throw Exception("Background streamables not supported")
-            }
-            Streamable.MediaType.Subtitle -> {
-                throw Exception("Subtitles not supported")
-            }
-        }
+        return components.trackLoader.loadStreamableMedia(streamable, preferVideos)
     }
+    
    override suspend fun loadTrack(track: Track, isDownload: Boolean): Track {
-        try {
-            ensureVisitorId()
-        } catch (e: Exception) {
-            println("Failed to ensure visitor ID in loadTrack: ${e.message}")
-        }
-
-        val ytmTrack = runCatching {
-            api.LoadSong.loadSong(track.id).getOrThrow()
-        }.map { ytmSongConverter.toTrack(it) }.getOrNull()
-
-        val legacyTrack = runCatching {
-            songEndPoint.loadSong(track.id).getOrThrow()
-        }.getOrNull()
-
-        val mergedExtras = mutableMapOf<String, String>()
-        ytmTrack?.extras?.let { mergedExtras.putAll(it) }
-        legacyTrack?.extras?.let { mergedExtras.putAll(it) }
-        if (!mergedExtras.containsKey("videoId")) {
-            mergedExtras["videoId"] = track.id
-        }
-
-        val finalTrack = when {
-            ytmTrack != null -> ytmTrack.copy(
-                cover = ytmTrack.cover ?: track.cover ?: legacyTrack?.cover,
-                album = ytmTrack.album ?: legacyTrack?.album,
-                artists = if (ytmTrack.artists.isNotEmpty()) ytmTrack.artists else legacyTrack?.artists ?: track.artists,
-                extras = mergedExtras
-            )
-            legacyTrack != null -> legacyTrack.copy(
-                extras = mergedExtras,
-                streamables = legacyTrack.streamables.takeIf { it.isNotEmpty() } ?: listOf(
-                    Streamable.server(
-                        id = "youtube_music_${track.id}",
-                        quality = 128,
-                        title = "YouTube Music",
-                        extras = mapOf("videoId" to track.id)
-                    )
-                )
-            )
-            else -> track.copy(
-                extras = mergedExtras,
-                streamables = track.streamables.takeIf { it.isNotEmpty() } ?: listOf(
-                    Streamable.server(
-                        id = "youtube_music_${track.id}",
-                        quality = 128,
-                        title = "YouTube Music",
-                        extras = mapOf("videoId" to track.id)
-                    )
-                )
-            )
-        }
-
-        return finalTrack
+        return components.trackLoader.loadTrackDetails(track, thumbnailQuality)
     }
 
     private suspend fun loadRelated(track: Track): List<Shelf> {
@@ -408,305 +214,31 @@ class YoutubeExtension : ExtensionClient, HomeFeedClient, TrackClient, SearchFee
     private var oldSearch: Pair<String, List<Shelf>>? = null
     
     override suspend fun loadSearchFeed(query: String): Feed<Shelf> {
-        if (query.isBlank()) {
-            val result = songFeedEndPoint.getSongFeed().getOrThrow()
-            val filterChips = result.filter_chips?.map {
-                Tab(
-                    id = it.params,
-                    title = it.text.getString(language),
-                    isSort = false,
-                    extras = mapOf(
-                        "browseId" to it.params,
-                        "category" to it.text.getString(language),
-                        "isFilterChip" to "true",
-                        "isHomeFeedTab" to "true"
-                    )
-                )
-            } ?: emptyList()
-            
-            return Feed(filterChips) { tab ->
-                val pagedData = PagedData.Continuous { continuation ->
-                    try {
-                        val params = tab?.id
-                        val result = songFeedEndPoint.getSongFeed(
-                            params = params, continuation = continuation
-                        ).getOrThrow()
-                        
-                        val data = result.layouts.map { itemLayout ->
-                            itemLayout.toShelf(api, SINGLES, thumbnailQuality)
-                        }
-                        
-                        Page(data, result.ctoken)
-                    } catch (e: Exception) {
-                        Page(emptyList(), null)
-                    }
-                }
-                Feed.Data(pagedData)
-            }
-        }
-
-        val tabs = listOf(
-            Tab("all", "All"),
-            Tab("songs", "Songs"),
-            Tab("videos", "Videos"),
-            Tab("albums", "Albums"),
-            Tab("artists", "Artists"),
-            Tab("playlists", "Playlists")
-        )
-
-        return Feed(tabs) { tab ->
-            when (tab?.id) {
-                "all" -> createAllTab(query)
-                "songs" -> createSongsTab(query)
-                "videos" -> createVideosTab(query)
-                "albums" -> createAlbumsTab(query)
-                "artists" -> createArtistsTab(query)
-                "playlists" -> createPlaylistsTab(query)
-                else -> createAllTab(query) 
-            }
-        }
-    }
-
-    private suspend fun createAllTab(query: String): Feed.Data<Shelf> {
-        return try {
-            val allShelves = mutableListOf<Shelf>()
-            
-            // Search for songs
-            try {
-                val songResults = api.Search.search(
-                    query,
-                    params = SearchType.SONG.getDefaultParams()
-                ).getOrNull()
-                if (songResults != null) {
-                    allShelves.addAll(convertSearchResultsToShelves(songResults))
-                }
-            } catch (e: Exception) {
-                println("Songs search failed in All tab: ${e.message}")
-            }            
-            // Search for videos
-            try {
-                val videoResults = api.Search.search(
-                    query,
-                    params = SearchType.VIDEO.getDefaultParams()
-                ).getOrNull()
-                if (videoResults != null) {
-                    allShelves.addAll(convertSearchResultsToShelves(videoResults))
-                }
-            } catch (e: Exception) {
-                println("Videos search failed in All tab: ${e.message}")
-            }           
-            // Search for albums
-            try {
-                val albumResults = api.Search.search(
-                    query,
-                    params = SearchType.ALBUM.getDefaultParams()
-                ).getOrNull()
-                if (albumResults != null) {
-                    allShelves.addAll(convertSearchResultsToShelves(albumResults))
-                }
-            } catch (e: Exception) {
-                println("Albums search failed in All tab: ${e.message}")
-            }           
-            // Search for artists
-            try {
-                val artistResults = api.Search.search(
-                    query,
-                    params = SearchType.ARTIST.getDefaultParams()
-                ).getOrNull()
-                if (artistResults != null) {
-                    allShelves.addAll(convertSearchResultsToShelves(artistResults))
-                }
-            } catch (e: Exception) {
-                println("Artists search failed in All tab: ${e.message}")
-            }           
-            // Search for playlists
-            try {
-                val playlistResults = api.Search.search(
-                    query,
-                    params = SearchType.PLAYLIST.getDefaultParams()
-                ).getOrNull()
-                if (playlistResults != null) {
-                    allShelves.addAll(convertSearchResultsToShelves(playlistResults))
-                }
-            } catch (e: Exception) {
-                println("Playlists search failed in All tab: ${e.message}")
-            }
-            
-            allShelves.toFeedData()
-        } catch (e: Exception) {
-            println("All tab search failed: ${e.message}")
-            emptyList<Shelf>().toFeedData()
-        }
-    }
-
-    private suspend fun createSongsTab(query: String): Feed.Data<Shelf> {
-        return try {
-            val searchResult = api.Search.search(
-                query,
-                params = SearchType.SONG.getDefaultParams()
-            ).getOrThrow()
-            
-            val shelves = convertSearchResultsToShelves(searchResult)
-            shelves.toFeedData()
-        } catch (e: Exception) {
-            println("Songs search failed: ${e.message}")
-            emptyList<Shelf>().toFeedData()
-        }
-    }
-
-    private suspend fun createVideosTab(query: String): Feed.Data<Shelf> {
-        return try {
-            val searchResult = api.Search.search(
-                query,
-                params = SearchType.VIDEO.getDefaultParams()
-            ).getOrThrow()
-            
-            val shelves = convertSearchResultsToShelves(searchResult)
-            shelves.toFeedData()
-        } catch (e: Exception) {
-            println("Videos search failed: ${e.message}")
-            emptyList<Shelf>().toFeedData()
-        }
-    }
-
-    private suspend fun createAlbumsTab(query: String): Feed.Data<Shelf> {
-        return try {
-            val searchResult = api.Search.search(
-                query,
-                params = SearchType.ALBUM.getDefaultParams()
-            ).getOrThrow()
-            
-            val shelves = convertSearchResultsToShelves(searchResult)
-            shelves.toFeedData()
-        } catch (e: Exception) {
-            println("Albums search failed: ${e.message}")
-            emptyList<Shelf>().toFeedData()
-        }
-    }
-
-    private suspend fun createArtistsTab(query: String): Feed.Data<Shelf> {
-        return try {
-            val searchResult = api.Search.search(
-                query,
-                params = SearchType.ARTIST.getDefaultParams()
-            ).getOrThrow()
-            
-            val shelves = convertSearchResultsToShelves(searchResult)
-            shelves.toFeedData()
-        } catch (e: Exception) {
-            println("Artists search failed: ${e.message}")
-            emptyList<Shelf>().toFeedData()
-        }
-    }
-
-    private suspend fun createPlaylistsTab(query: String): Feed.Data<Shelf> {
-        return try {
-            val searchResult = api.Search.search(
-                query,
-                params = SearchType.PLAYLIST.getDefaultParams()
-            ).getOrThrow()
-            
-            val shelves = convertSearchResultsToShelves(searchResult)
-            shelves.toFeedData()
-        } catch (e: Exception) {
-            println("Playlists search failed: ${e.message}")
-            emptyList<Shelf>().toFeedData()
-        }
-    }
-
-    private suspend fun convertSearchResultsToShelves(searchResults: SearchResults): List<Shelf> {
-        val shelves = mutableListOf<Shelf>()
-        
-        for ((layout, filter) in searchResults.categories) {
-            val title = layout.title?.getString("en") ?: "Results"
-            val items = layout.items
-            
-            if (items.isNotEmpty()) {
-                val echoItems = items.mapNotNull { item ->
-                    when (item) {
-                        is YtmSong -> item.toTrack(thumbnailQuality)
-                        is YtmArtist -> item.toArtist(thumbnailQuality)
-                        is YtmPlaylist -> {
-                            if (item.type == YtmPlaylist.Type.ALBUM) {
-                                item.toAlbum(false, thumbnailQuality)
-                            } else {
-                                item.toPlaylist(thumbnailQuality)
-                            }
-                        }
-                        else -> null
-                    }
-                }
-                
-                if (echoItems.isNotEmpty()) {
-                    val shelf = if (echoItems.all { it is Track }) {
-                        Shelf.Lists.Tracks(
-                            id = "search_${title.lowercase().replace(" ", "_")}_${System.currentTimeMillis()}",
-                            title = title,
-                            list = echoItems.filterIsInstance<Track>()
-                        )
-                    } else {
-                        Shelf.Lists.Items(
-                            id = "search_${title.lowercase().replace(" ", "_")}_${System.currentTimeMillis()}",
-                            title = title,
-                            list = echoItems
-                        )
-                    }
-                    shelves.add(shelf)
-                }
-            }
-        }
-        
-        return shelves
+        return components.searchFeedProvider.loadSearchFeed(query, thumbnailQuality)
     }
     
     override suspend fun loadTracks(radio: Radio): Feed<Track> =
-        PagedData.Single { json.decodeFromString<List<Track>>(radio.extras["tracks"]!!) }.toFeed()
+        components.radioGenerator.loadRadioTracks(radio)
 
     suspend fun radio(album: Album): Radio {
-        val track = api.LoadPlaylist.loadPlaylist(album.id).getOrThrow().items
-            ?.lastOrNull()?.toTrack(HIGH)
-            ?: throw Exception("No tracks found")
-        return radio(track, null)
+        return components.radioGenerator.generateRadio(album)
     }
 
     suspend fun radio(artist: Artist): Radio {
-        val id = "radio_${artist.id}"
-        val result = api.ArtistRadio.getArtistRadio(artist.id, null).getOrThrow()
-        val tracks = result.items.map { song -> song.toTrack(thumbnailQuality) }
-        return Radio(
-            id = id,
-            title = "${artist.name} Radio",
-            extras = mutableMapOf<String, String>().apply {
-                put("tracks", json.encodeToString(tracks))
-            }
-        )
+        return components.radioGenerator.generateRadio(artist)
     }
 
-
     suspend fun radio(track: Track, context: EchoMediaItem? = null): Radio {
-        val id = "radio_${track.id}"
-        val cont = context?.extras?.get("cont")
-        val result = api.SongRadio.getSongRadio(track.id, cont).getOrThrow()
-        val tracks = result.items.map { song -> song.toTrack(thumbnailQuality) }
-        return Radio(
-            id = id,
-            title = "${track.title} Radio",
-            extras = mutableMapOf<String, String>().apply {
-                put("tracks", json.encodeToString(tracks))
-                result.continuation?.let { put("cont", it) }
-            }
-        )
+        return components.radioGenerator.generateRadio(track, context)
     }
 
     suspend fun radio(user: User): Radio {
         val artist = ModelTypeHelper.userToArtist(user)
-        return radio(artist)
+        return components.radioGenerator.generateRadio(artist)
     }
 
     suspend fun radio(playlist: Playlist): Radio {
-        val track = loadTracks(playlist)?.loadAll()?.lastOrNull()
-            ?: throw Exception("No tracks found")
-        return radio(track, null)
+        return components.radioGenerator.generateRadio(playlist)
     }
 
     override suspend fun loadFeed(album: Album): Feed<Shelf>? {
@@ -718,7 +250,7 @@ class YoutubeExtension : ExtensionClient, HomeFeedClient, TrackClient, SearchFee
     }
 
 
-    private val trackMap = mutableMapOf<String, PagedData<Track>>()
+    private val trackMap get() = components.trackCache
     override suspend fun loadAlbum(album: Album): Album {
         val (ytmPlaylist, _, data) = playlistEndPoint.loadFromPlaylist(
             album.id, null, thumbnailQuality
@@ -823,15 +355,11 @@ class YoutubeExtension : ExtensionClient, HomeFeedClient, TrackClient, SearchFee
             "https://accounts.google.com/v3/signin/identifier?dsh=S1527412391%3A1678373417598386&continue=https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26app%3Ddesktop%26hl%3Den-GB%26next%3Dhttps%253A%252F%252Fmusic.youtube.com%252F%253Fcbrd%253D1%26feature%3D__FEATURE__&hl=en-GB&ifkv=AWnogHfK4OXI8X1zVlVjzzjybvICXS4ojnbvzpE4Gn_Pfddw7fs3ERdfk-q3tRimJuoXjfofz6wuzg&ltmpl=music&passive=true&service=youtube&uilel=3&flowName=GlifWebSignIn&flowEntry=ServiceLogin".toGetRequest()
         override val stopUrlRegex = "https://music\\.youtube\\.com/.*".toRegex()
         override suspend fun onStop(url: NetworkRequest, cookie: String): List<User> {
-            if (!cookie.contains("SAPISID")) throw Exception("Login Failed, could not load SAPISID")
-            val auth = run {
-                val currentTime = System.currentTimeMillis() / 1000
-                val id = cookie.split("SAPISID=")[1].split(";")[0]
-                val str = "$currentTime $id https://music.youtube.com"
-                val idHash = MessageDigest.getInstance("SHA-1").digest(str.toByteArray())
-                    .joinToString(separator = "") { eachByte -> "%02x".format(eachByte) }
-                "SAPISIDHASH ${currentTime}_${idHash}"
-            }
+            val cookieMap = CookieParser.parse(cookie)
+            val sapisid = CookieParser.getSapisid(cookieMap)
+                ?: throw Exception("Login Failed SAPISID cookie not found or empty. Please try logging in again.")
+            
+            val auth = CookieParser.generateSapisidHash(sapisid)
             val headersMap = mutableMapOf("cookie" to cookie, "authorization" to auth)
             val headers = headers { headersMap.forEach { (t, u) -> append(t, u) } }
             return api.client.request("https://music.youtube.com/getAccountSwitcherEndpoint") {
@@ -850,36 +378,47 @@ class YoutubeExtension : ExtensionClient, HomeFeedClient, TrackClient, SearchFee
             val cookie = user.extras["cookie"] ?: throw Exception("No cookie")
             val auth = user.extras["auth"] ?: throw Exception("No auth")
 
-            val headers = headers {
+            val headers = io.ktor.http.headers {
                 append("cookie", cookie)
                 append("authorization", auth)
             }
             val authenticationState =
-                YoutubeiAuthenticationState(api, headers, user.id.ifEmpty { null })
+                dev.toastbits.ytmkt.impl.youtubei.YoutubeiAuthenticationState(api, headers, user.id.ifEmpty { null })
             api.user_auth_state = authenticationState
         }
-        api.visitor_id = runCatching { kotlinx.coroutines.runBlocking { visitorEndpoint.getVisitorId() } }.getOrNull()
+        api.visitor_id = runCatching { kotlinx.coroutines.runBlocking { components.visitorEndpoint.getVisitorId() } }.getOrNull()
     }
 
     override suspend fun getCurrentUser(): User? {
         val headers = api.user_auth_state?.headers ?: return null
-        val userResponse = api.client.request("https://music.youtube.com/getAccountSwitcherEndpoint") {
-            headers {
-                append("referer", "https://music.youtube.com/")
-                appendAll(headers)
+        return runCatching {
+            val response = api.client.request("https://music.youtube.com/getAccountSwitcherEndpoint") {
+                headers {
+                    append("referer", "https://music.youtube.com/")
+                    appendAll(headers)
+                }
             }
-        }.getUsers("", "").firstOrNull() ?: return null
-        
-        return userResponse.copy(
-            subtitle = userResponse.extras["email"] ?: "YouTube Music User",
-            extras = userResponse.extras.toMutableMap().apply {
-                put("isLoggedIn", "true")
-                put("userService", "youtube_music")
-                put("accountType", "google")
-                put("lastUpdated", System.currentTimeMillis().toString())
-                putAll(userResponse.extras)
+            
+            val responseText = response.bodyAsText()
+            val jsonText = if (responseText.startsWith(")]}'")) {
+                responseText.substringAfter(")]}'")
+            } else {
+                responseText
             }
-        )
+            
+            val accountResponse = json.decodeFromString<dev.brahmkshatriya.echo.extension.endpoints.GoogleAccountResponse>(jsonText)
+            val userResponse = accountResponse.getUsers("", "").firstOrNull() ?: return@runCatching null
+            
+            userResponse.copy(
+                subtitle = userResponse.extras["email"] ?: "YouTube Music User",
+                extras = userResponse.extras.toMutableMap().apply {
+                    put("isLoggedIn", "true")
+                    put("userService", "youtube_music")
+                    put("accountType", "google")
+                    put("lastUpdated", System.currentTimeMillis().toString())
+                }
+            )
+        }.getOrNull()
     }
 
 
@@ -891,18 +430,18 @@ class YoutubeExtension : ExtensionClient, HomeFeedClient, TrackClient, SearchFee
         try {
             val result = endpoint.markSongAsWatched(details.track.id)
             if (result.isFailure) {
-                println("MarkSongAsWatched failed: ${result.exceptionOrNull()?.message}")
+                println("MarkSongAsWatched failed ${result.exceptionOrNull()?.message}")
             }
         } catch (e: Exception) {
-            println("MarkSongAsWatched threw: ${e.message}")
+            println("MarkSongAsWatched threw ${e.message}")
         }
     }
 
-        private suspend fun <T> withUserAuth(
+    // Keep this helper for backward compatibility with remaining code
+    private suspend fun <T> withUserAuth(
         block: suspend (auth: YoutubeiAuthenticationState) -> T
     ): T {
-        val state = api.user_auth_state
-            ?: throw ClientException.LoginRequired()
+        val state = components.authManager.requireAuth()
         return runCatching { block(state) }.getOrElse {
             if (it is ClientRequestException) {
                 if (it.response.status.value == 401) {
@@ -916,176 +455,51 @@ class YoutubeExtension : ExtensionClient, HomeFeedClient, TrackClient, SearchFee
     }
 
     override suspend fun loadLibraryFeed(): Feed<Shelf> {
-        val tabs = listOf(
-            Tab(
-                id = "FEmusic_library_landing", 
-                title = "All",
-                isSort = false,
-                extras = mapOf(
-                    "browseId" to "FEmusic_library_landing",
-                    "category" to "All",
-                    "isLibraryTab" to "true",
-                    "isDefaultLibraryTab" to "true"
-                )
-            ),
-            Tab(
-                id = "FEmusic_history", 
-                title = "History",
-                isSort = false,
-                extras = mapOf(
-                    "browseId" to "FEmusic_history",
-                    "category" to "History",
-                    "isLibraryTab" to "true",
-                    "contentType" to "history"
-                )
-            ),
-            Tab(
-                id = "FEmusic_liked_playlists", 
-                title = "Playlists",
-                isSort = false,
-                extras = mapOf(
-                    "browseId" to "FEmusic_liked_playlists",
-                    "category" to "Playlists",
-                    "isLibraryTab" to "true",
-                    "contentType" to "playlists"
-                )
-            ),
-//            Tab("FEmusic_listening_review", "Review"),
-            Tab(
-                id = "FEmusic_liked_videos", 
-                title = "Songs",
-                isSort = false,
-                extras = mapOf(
-                    "browseId" to "FEmusic_liked_videos",
-                    "category" to "Songs",
-                    "isLibraryTab" to "true",
-                    "contentType" to "liked_songs"
-                )
-            ),
-            Tab(
-                id = "FEmusic_library_corpus_track_artists", 
-                title = "Artists",
-                isSort = false,
-                extras = mapOf(
-                    "browseId" to "FEmusic_library_corpus_track_artists",
-                    "category" to "Artists",
-                    "isLibraryTab" to "true",
-                    "contentType" to "artists"
-                )
-            )
-        )
-        
-        return Feed(tabs) { tab ->
-            val pagedData = PagedData.Continuous<Shelf> { cont ->
-                val browseId = tab?.id ?: "FEmusic_library_landing"
-                
-                if (browseId == "FEmusic_library_corpus_track_artists") {
-                    try {
-                        val artists = withUserAuth { auth ->
-                            auth.LikedArtists.getLikedArtists().getOrThrow()
-                        }
-                        val shelves = artists.mapNotNull { artist ->
-                            artist.toEchoMediaItem(false, thumbnailQuality)?.toShelf()
-                        }
-                        Page(shelves, null)
-                    } catch (e: Exception) {
-                        println("Failed to load liked artists: ${e.message}")
-                        Page(emptyList(), null)
-                    }
-                } else {
-                    val (result, ctoken) = withUserAuth { libraryEndPoint.loadLibraryFeed(browseId, cont) }
-                    val data = result.mapNotNull { playlist ->
-                        playlist.toEchoMediaItem(false, thumbnailQuality)?.toShelf()
-                    }
-                    Page(data, ctoken)
-                }
-            }
-            Feed.Data(pagedData)
-        }
+        return components.libraryFeedProvider.loadLibraryFeed(thumbnailQuality)
     }
 
     override suspend fun createPlaylist(title: String, description: String?): Playlist {
-        val playlistId = withUserAuth {
-            it.CreateAccountPlaylist
-                .createAccountPlaylist(title, description ?: "")
-                .getOrThrow()
-        }
-        return loadPlaylist(Playlist(playlistId, "", true))
+        return components.playlistManager.createPlaylist(title, description)
     }
 
-    override suspend fun deletePlaylist(playlist: Playlist) = withUserAuth {
-        it.DeleteAccountPlaylist.deleteAccountPlaylist(playlist.id).getOrThrow()
+    override suspend fun deletePlaylist(playlist: Playlist) {
+        components.playlistManager.deletePlaylist(playlist)
     }
 
     override suspend fun likeItem(item: EchoMediaItem, shouldLike: Boolean) {
-        val track = item as? Track ?: throw Exception("Only tracks can be liked")
-        likeTrack(track, shouldLike)
+        components.likeManager.setLiked(item, shouldLike)
     }
 
     private suspend fun likeTrack(track: Track, isLiked: Boolean) {
-        val likeStatus = if (isLiked) SongLikedStatus.LIKED else SongLikedStatus.NEUTRAL
-        withUserAuth { it.SetSongLiked.setSongLiked(track.id, likeStatus).getOrThrow() }
+        components.likeManager.setLiked(track, isLiked)
     }
 
-    override suspend fun listEditablePlaylists(track: Track?): List<Pair<Playlist, Boolean>> =
-        withUserAuth { auth ->
-            auth.AccountPlaylists.getAccountPlaylists().getOrThrow().mapNotNull {
-                if (it.id != "VLSE") it.toPlaylist(thumbnailQuality) to false
-                else null
-            }
-
-        }
+    override suspend fun listEditablePlaylists(track: Track?): List<Pair<Playlist, Boolean>> {
+        return components.playlistManager.getEditablePlaylists(track)
+    }
 
     override suspend fun editPlaylistMetadata(
         playlist: Playlist, title: String, description: String?
     ) {
-        withUserAuth { auth ->
-            val editor = auth.AccountPlaylistEditor.getEditor(playlist.id, listOf(), listOf())
-            editor.performAndCommitActions(
-                listOfNotNull(
-                    PlaylistEditor.Action.SetTitle(title),
-                    description?.let { PlaylistEditor.Action.SetDescription(it) }
-                )
-            )
-        }
+        components.playlistManager.updatePlaylistMetadata(playlist, title, description)
     }
 
     override suspend fun removeTracksFromPlaylist(
         playlist: Playlist, tracks: List<Track>, indexes: List<Int>
     ) {
-        val actions = indexes.map {
-            val track = tracks[it]
-            EchoEditPlaylistEndpoint.Action.Remove(track.id, track.extras["setId"]!!)
-        }
-        editorEndpoint.editPlaylist(playlist.id, actions)
+        components.playlistManager.removeTracks(playlist, tracks, indexes)
     }
 
     override suspend fun addTracksToPlaylist(
         playlist: Playlist, tracks: List<Track>, index: Int, new: List<Track>
     ) {
-        val actions = new.map { EchoEditPlaylistEndpoint.Action.Add(it.id) }
-        val setIds = editorEndpoint.editPlaylist(playlist.id, actions).playlistEditResults!!.map {
-            it.playlistEditVideoAddedResultData.setVideoId
-        }
-        val addBeforeTrack = tracks.getOrNull(index)?.extras?.get("setId") ?: return
-        val moveActions = setIds.map { setId ->
-            EchoEditPlaylistEndpoint.Action.Move(setId, addBeforeTrack)
-        }
-        editorEndpoint.editPlaylist(playlist.id, moveActions)
+        components.playlistManager.addTracks(playlist, tracks, index, new)
     }
 
     override suspend fun moveTrackInPlaylist(
         playlist: Playlist, tracks: List<Track>, fromIndex: Int, toIndex: Int
     ) {
-        val setId = tracks[fromIndex].extras["setId"]!!
-        val before = if (fromIndex - toIndex > 0) 0 else 1
-        val addBeforeTrack = tracks.getOrNull(toIndex + before)?.extras?.get("setId")
-            ?: return
-        editorEndpoint.editPlaylist(
-            playlist.id, listOf(
-                EchoEditPlaylistEndpoint.Action.Move(setId, addBeforeTrack)
-            )
-        )
+        components.playlistManager.moveTrack(playlist, tracks, fromIndex, toIndex)
     }
 
     override suspend fun searchTrackLyrics(clientId: String, track: Track): Feed<Lyrics> {
@@ -1108,28 +522,14 @@ class YoutubeExtension : ExtensionClient, HomeFeedClient, TrackClient, SearchFee
 
     override suspend fun loadLyrics(lyrics: Lyrics) = lyrics
 
-    override suspend fun onShare(item: EchoMediaItem) = when (item) {
-        is Album -> "https://music.youtube.com/browse/${item.id}"
-        is Playlist -> "https://music.youtube.com/playlist?list=${item.id}"
-        is Radio -> "https://music.youtube.com/playlist?list=${item.id}"
-        is Artist -> "https://music.youtube.com/channel/${item.id}"
-        is Track -> "https://music.youtube.com/watch?v=${item.id}"
-        else -> throw ClientException.NotSupported("Unsupported media item type for sharing")
-    }
+    override suspend fun onShare(item: EchoMediaItem) = components.shareManager.getShareUrl(item)
     
     override suspend fun radio(item: EchoMediaItem, context: EchoMediaItem?): Radio {
-        val fixedItem = when(item) {
+        val mediaItem = when (item) {
             is User -> ModelTypeHelper.userToArtist(item)
             else -> item
         }
-        
-        return when(fixedItem) {
-            is Track -> radio(fixedItem)
-            is Album -> radio(fixedItem)
-            is Artist -> radio(fixedItem)
-            is Playlist -> radio(fixedItem)
-            else -> throw ClientException.NotSupported("Radio not supported for this media item type")
-        }
+        return components.radioGenerator.generateRadio(mediaItem, context)
     }
     
     override suspend fun loadRadio(radio: Radio): Radio = radio
@@ -1143,38 +543,19 @@ class YoutubeExtension : ExtensionClient, HomeFeedClient, TrackClient, SearchFee
     override suspend fun onPlayingStateChanged(details: TrackDetails?, isPlaying: Boolean) {}
     
     override suspend fun isItemLiked(item: EchoMediaItem): Boolean {
-        return item.extras["isLiked"]?.toBoolean() ?: false
+        return components.likeManager.isLiked(item)
     }
     
     override suspend fun isFollowing(item: EchoMediaItem): Boolean {
-        return when (item) {
-            is Artist -> {
-                try {
-                    withUserAuth { auth ->
-                        val result = auth.SubscribedToArtist.isSubscribedToArtist(item.id)
-                        result.getOrNull() ?: false
-                    }
-                } catch (e: Exception) {
-                    println("Failed to check if artist is followed: ${e.message}")
-                    false
-                }
-            }
-            else -> false
-        }
+        return components.followManager.isFollowing(item)
     }
     
     override suspend fun getFollowersCount(item: EchoMediaItem): Long? {
-        return item.extras["followerCount"]?.toLong()
+        return components.followManager.getFollowerCount(item)
     }
     
     override suspend fun followItem(item: EchoMediaItem, shouldFollow: Boolean) {
-        when(item) {
-            is Artist -> {
-                val subId = item.extras["subId"]
-                withUserAuth { it.SetSubscribedToArtist.setSubscribedToArtist(item.id, shouldFollow, subId) }
-            }
-            else -> throw ClientException.NotSupported("Follow not supported for this media item type")
-        }
+        components.followManager.setFollowing(item, shouldFollow)
     }
     
     override suspend fun searchLyrics(query: String): Feed<Lyrics> {

@@ -61,8 +61,16 @@ class EchoVideoEndpoint(override val api: YoutubeiApi) : ApiEndpoint() {
 
 @Serializable
 data class YoutubeFormatResponse(
+    val playabilityStatus: PlayabilityStatus? = null,
     val streamingData: StreamingData? = null,
     val videoDetails: VideoDetails
+)
+
+@Serializable
+data class PlayabilityStatus(
+    val status: String,
+    val reason: String? = null,
+    val playableInEmbed: Boolean? = null
 )
 
 @Serializable
@@ -76,6 +84,8 @@ data class StreamingData(
 data class AdaptiveFormat(
     val itag: Long? = null,
     val url: String? = null,
+    val signatureCipher: String? = null,
+    val cipher: String? = null,
     val mimeType: String,
     val bitrate: Int,
     val width: Long? = null,
@@ -113,15 +123,15 @@ data class Range(
 
 @Serializable
 data class VideoDetails(
-    val videoId: String,
-    val title: String?,
-    val lengthSeconds: String,
-    val channelId: String,
+    val videoId: String, 
+    val title: String? = null,
+    val lengthSeconds: String? = null,
+    val channelId: String? = null,
     val isOwnerViewing: Boolean? = null,
     val isCrawlable: Boolean? = null,
     val allowRatings: Boolean? = null,
     val viewCount: String? = null,
-    val author: String,
+    val author: String? = null,
     val isPrivate: Boolean? = null,
     val isUnpluggedCorpus: Boolean? = null,
     val musicVideoType: String? = null,

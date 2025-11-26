@@ -53,31 +53,42 @@ suspend fun MediaItemLayout.toShelf(
                 try {
                     item.toEchoMediaItem(single, quality)
                 } catch (e: Exception) {
-                    println("DEBUG: Failed to convert media item in shelf: ${e.message}")
+                    println("Failed to convert media item in shelf: ${e.message}")
                     null
                 }
             },
             more = view_more?.getBrowseParamsData()?.browse_id?.let { id ->
+                if (id.startsWith("FEmusic_")) {
+                    println("Skipping view more for special browse_id: $id")
+                    return@let null
+                }
+                
                 val pagedData = PagedData.Single<EchoMediaItem> {
                     try {
+                        println("Loading view more page for browse_id: $id, visitor_id: ${api.visitor_id}")
                         val rows =
                             api.GenericFeedViewMorePage.getGenericFeedViewMorePage(id).getOrThrow()
-                        rows.mapNotNull { itemLayout ->
+                        println("Got ${rows.size} items from view more page")
+                        rows.mapNotNull { ytmItem ->
                             try {
-                                itemLayout.toEchoMediaItem(single, quality)
+                                ytmItem.toEchoMediaItem(single, quality)
                             } catch (e: Exception) {
-                                println("DEBUG: Failed to convert media item in generic feed: ${e.message}")
+                                println("Failed to convert media item in generic feed: ${e.message}")
+                                e.printStackTrace()
                                 null
                             }
                         }
                     } catch (e: NotImplementedError) {
-                        println("DEBUG: Generic feed view more page not implemented for ID: $id")
+                        println("Generic feed view more page not implemented for ID: $id")
+                        e.printStackTrace()
                         emptyList()
                     } catch (e: NullPointerException) {
-                        println("DEBUG: Null pointer in generic feed view more page for ID: $id")
+                        println("Null pointer in generic feed view more page for ID: $id")
+                        e.printStackTrace()
                         emptyList()
                     } catch (e: Exception) {
-                        println("DEBUG: Error loading generic feed view more page for ID: $id: ${e.message}")
+                        println("Error loading generic feed view more page for ID: $id: ${e.message}")
+                        e.printStackTrace()
                         emptyList()
                     }
                 }
@@ -86,7 +97,7 @@ suspend fun MediaItemLayout.toShelf(
                         try {
                             pagedData.loadAll().map { Shelf.Item(it) }
                         } catch (e: Exception) {
-                            println("DEBUG: Failed to load paged data for shelf: ${e.message}")
+                            println("Failed to load paged data for shelf: ${e.message}")
                             emptyList()
                         }
                     })
@@ -94,7 +105,7 @@ suspend fun MediaItemLayout.toShelf(
             }
         )
     } catch (e: Exception) {
-        println("DEBUG: Failed to create shelf: ${e.message}")
+        println("Failed to create shelf: ${e.message}")
         Shelf.Lists.Items(
             id = "error-${System.currentTimeMillis()}",
             title = "Content unavailable",
@@ -123,7 +134,7 @@ fun YtmMediaItem.toEchoMediaItem(
             else -> null
         }
     } catch (e: Exception) {
-        println("DEBUG: Failed to convert YtmMediaItem to EchoMediaItem: ${e.message}")
+        println("Failed to convert YtmMediaItem to EchoMediaItem: ${e.message}")
         null
     }
 }
@@ -152,7 +163,7 @@ fun YtmPlaylist.toPlaylist(
             extras = extras,
         )
     } catch (e: Exception) {
-        println("DEBUG: Failed to convert YtmPlaylist to Playlist: ${e.message}")
+        println("Failed to convert YtmPlaylist to Playlist: ${e.message}")
         Playlist(
             id = id,
             title = name ?: "Unknown Playlist",
@@ -191,7 +202,7 @@ fun YtmPlaylist.toAlbum(
             description = description,
         )
     } catch (e: Exception) {
-        println("DEBUG: Failed to convert YtmPlaylist to Album: ${e.message}")
+        println("Failed to convert YtmPlaylist to Album: ${e.message}")
         Album(
             id = id,
             title = name ?: "Unknown Album",
@@ -246,7 +257,7 @@ fun YtmSong.toTrack(
             }
         )
     } catch (e: Exception) {
-        println("DEBUG: Failed to convert YtmSong to Track: ${e.message}")
+        println("Failed to convert YtmSong to Track: ${e.message}")
         Track(
             id = id,
             title = name ?: "Unknown Track",
@@ -297,7 +308,7 @@ fun YtmArtist.toArtist(
             }
         )
     } catch (e: Exception) {
-        println("DEBUG: Failed to convert YtmArtist to Artist: ${e.message}")
+        println("Failed to convert YtmArtist to Artist: ${e.message}")
         Artist(
             id = id,
             name = name ?: "Unknown Artist",
@@ -337,7 +348,7 @@ fun YtmArtist.toUser(
             }
         )
     } catch (e: Exception) {
-        println("DEBUG: Failed to convert YtmArtist to User: ${e.message}")
+        println("Failed to convert YtmArtist to User: ${e.message}")
         User(
             id = id,
             name = name ?: "Unknown User",
@@ -352,7 +363,7 @@ fun User.toArtist(): Artist {
     return try {
         ModelTypeHelper.userToArtist(this)
     } catch (e: Exception) {
-        println("DEBUG: Failed to convert User to Artist: ${e.message}")
+        println("Failed to convert User to Artist: ${e.message}")
         Artist(
             id = id,
             name = name ?: "Unknown Artist",
